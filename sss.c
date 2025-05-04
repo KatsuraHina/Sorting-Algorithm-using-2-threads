@@ -1,105 +1,102 @@
-#include <stdio.h>              // printf, fopen, fscanf, perror
-#include <stdlib.h>             // malloc, free, exit
-#include <pthread.h>            // pthread APIs
-#include <unistd.h>             // usleep (optional)
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <unistd.h>
 
-/* Maximum number of integers in the input file */
 #define MAX_SIZE 200
 
-/* Shorter type aliases */
 typedef pthread_mutex_t PMutex;
 typedef pthread_cond_t  PCond;
 
-/* Shared data */
+/* Shared array and counts */
 int A[MAX_SIZE];
-int n;                // number of ints read
-int swap = 0;         // total swap count
-int swap_t1 = 0;      // swaps by T1
-int swap_t2 = 0;      // swaps by T2
+int n;
 
-/* Synchronization primitives */
+/* Total swaps across both threads */
+int swap = 0;
+
+/* Per-thread total swaps */
+int t1_swaps = 0;
+int t2_swaps = 0;
+
+/* Last-pass swaps for termination detection */
+int curr_swap_t1 = 0;
+int curr_swap_t2 = 0;
+
+/* Synchronization */
 PMutex lock       = PTHREAD_MUTEX_INITIALIZER;
 PCond  cond_t1    = PTHREAD_COND_INITIALIZER;
 PCond  cond_t2    = PTHREAD_COND_INITIALIZER;
 
-/* For the “main thread must block/unblock” requirement */
-PMutex main_mtx   = PTHREAD_MUTEX_INITIALIZER;
-PCond  main_cv    = PTHREAD_COND_INITIALIZER;
-int    workers_done = 0;   // set to 1 when sorting is over
+/* Main-thread block/unblock */
+PMutex main_mtx     = PTHREAD_MUTEX_INITIALIZER;
+PCond  main_cv      = PTHREAD_COND_INITIALIZER;
+int    workers_done = 0;
 
-/* Who’s turn? 1=T1’s turn, 2=T2’s turn */
+/* Whose turn? */
 int turn = 1;
 
-/* Stop flag once two zero-swap passes have occurred */
+/* When set, both threads break out */
 int stop_flag = 0;
 
-/* The sorting function run by both threads */
 void* sort(void* arg) {
-    int id = *((int*)arg);  // SAFELY unpack the thread ID
+    int id = *((int*)arg);
     free(arg);
-
     printf("Thread T%d starting\n", id);
 
     while (1) {
         pthread_mutex_lock(&lock);
-
         if (stop_flag) {
             pthread_mutex_unlock(&lock);
             break;
         }
-
-        /* wait for our turn */
         while (turn != id && !stop_flag) {
-            if (id == 1)
-                pthread_cond_wait(&cond_t1, &lock);
-            else
-                pthread_cond_wait(&cond_t2, &lock);
+            pthread_cond_wait(id==1 ? &cond_t1 : &cond_t2, &lock);
         }
         if (stop_flag) {
             pthread_mutex_unlock(&lock);
             break;
         }
 
-        /* do this thread’s pass */
         int local_swap = 0;
         if (id == 1) {
-            /* T1: compare A[2i] vs A[2i+1] */
+            /* T1: pairs (2i,2i+1) */
             for (int i = 0; i <= (n - 1) / 2; i++) {
-                int idx = 2 * i;
-                if (idx + 1 < n && A[idx] > A[idx + 1]) {
+                int idx = 2*i;
+                if (idx+1 < n && A[idx] > A[idx+1]) {
                     int tmp = A[idx];
-                    A[idx] = A[idx + 1];
-                    A[idx + 1] = tmp;
+                    A[idx] = A[idx+1];
+                    A[idx+1] = tmp;
                     local_swap++;
                 }
             }
-            swap_t1 = local_swap;
-            swap    += local_swap;
+            curr_swap_t1 = local_swap;
+            t1_swaps    += local_swap;
+            swap        += local_swap;
 
-            /* hand off to T2 */
             turn = 2;
             pthread_cond_signal(&cond_t2);
 
         } else {
-            /* T2: compare A[2i-1] vs A[2i] */
+            /* T2: pairs (2i-1,2i) */
             for (int i = 1; i <= (n - 1) / 2; i++) {
-                int idx = 2 * i - 1;
-                if (idx + 1 < n && A[idx] > A[idx + 1]) {
+                int idx = 2*i - 1;
+                if (idx+1 < n && A[idx] > A[idx+1]) {
                     int tmp = A[idx];
-                    A[idx] = A[idx + 1];
-                    A[idx + 1] = tmp;
+                    A[idx] = A[idx+1];
+                    A[idx+1] = tmp;
                     local_swap++;
                 }
             }
-            swap_t2 = local_swap;
-            swap    += local_swap;
+            curr_swap_t2 = local_swap;
+            t2_swaps    += local_swap;
+            swap        += local_swap;
 
-            /* termination check: two zero-swap passes in a row */
-            if (swap_t1 == 0 && swap_t2 == 0) {
+            /* stop when both last-pass swaps were zero */
+            if (curr_swap_t1 == 0 && curr_swap_t2 == 0) {
                 stop_flag = 1;
-                /* wake T1 if it’s waiting */
                 pthread_cond_signal(&cond_t1);
-                /* unblock main thread */
+                /* unblock main */
                 pthread_mutex_lock(&main_mtx);
                 workers_done = 1;
                 pthread_cond_signal(&main_cv);
@@ -111,12 +108,12 @@ void* sort(void* arg) {
         }
 
         pthread_mutex_unlock(&lock);
-        usleep(100000);  // optional delay for clarity
+        usleep(100000);
     }
 
     printf("Thread T%d: total number of swaps = %d\n",
-           id, (id == 1 ? swap_t1 : swap_t2));
-    pthread_exit(NULL);
+           id, (id == 1 ? t1_swaps : t2_swaps));
+    return NULL;
 }
 
 int main(int argc, char* argv[]) {
@@ -125,45 +122,33 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    /* read file */
-    FILE* file = fopen(argv[1], "r");
-    if (!file) {
-        perror("File open failed");
-        return 1;
-    }
+    FILE* f = fopen(argv[1], "r");
+    if (!f) { perror("File open failed"); return 1; }
     n = 0;
-    while (n < MAX_SIZE && fscanf(file, "%d", &A[n]) == 1) {
-        n++;
-    }
-    fclose(file);
+    while (n < MAX_SIZE && fscanf(f, "%d", &A[n]) == 1) n++;
+    fclose(f);
 
     printf("Main thread: read %d integers\n", n);
 
-    /* spawn T1 and T2 */
     pthread_t t1, t2;
-    int* id1 = malloc(sizeof(int));
-    int* id2 = malloc(sizeof(int));
-    *id1 = 1;  *id2 = 2;
+    int *id1 = malloc(sizeof(int)), *id2 = malloc(sizeof(int));
+    *id1 = 1; *id2 = 2;
 
     printf("Main thread: starting threads...\n");
     pthread_create(&t1, NULL, sort, id1);
     pthread_create(&t2, NULL, sort, id2);
 
-    /* block until worker signals completion */
+    /* block until workers signal completion */
     pthread_mutex_lock(&main_mtx);
     while (!workers_done)
         pthread_cond_wait(&main_cv, &main_mtx);
     pthread_mutex_unlock(&main_mtx);
 
-    /* clean up */
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
 
-    /* final output */
     printf("Sorted array: ");
-    for (int i = 0; i < n; i++) {
-        printf("%d ", A[i]);
-    }
+    for (int i = 0; i < n; i++) printf("%d ", A[i]);
     printf("\nTotal number of swaps to sort array A = %d\n", swap);
 
     return 0;
