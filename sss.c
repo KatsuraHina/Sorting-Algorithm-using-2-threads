@@ -172,4 +172,5 @@ int main(int argc, char* argv[]) {
     }
     printf("\nTotal number of swaps to sort array A = %d\n", swap);
 
-    return 0; 
+    return 0;
+}
