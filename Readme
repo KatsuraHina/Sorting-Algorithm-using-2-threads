@@ -1,0 +1,28 @@
+# Assingment 1 - Simple Sorting Simulation (sss)
+
+This C program uses a sorting algorithm using two Pthreads, T1 and T2. It sorts an array of integers from an input file called "ToSort".
+
+## Description
+The program will read a list of integers from a file into an array. We then create two threads T1 and T2 to sort the array concurrently.
+
+1. T1 will reapeatedly check each pair of integers at locations A[2i] and A[2i+1], For each pair of integers, T1 will swap them if they are not in order.
+2. T2 will also repeatedly check each pair of integers, but this time on A[2i-1] and A[2i+1]. for each pair of elements T2 will swap them if they are not in order. 
+
+The threads will them execute in alternating order using mutexes and conditional variables for syncronization. The process will finish when both T1 and T2 finish a full pass with 0 swaps, meaning that the array has finished sorting.
+
+The main thread will wait for the worker threads to complete before printing the sorted array and the total number of swaps performed.
+
+## Prerequisite
+
+- A c compiler that supports C (For this instance I used "Visual Studio Code")
+- A system that supports POSIX thread (Linux and macOS)
+
+## Compilation
+To compile the program use gcc and link the pthread library.
+
+gcc sss.c - o sss -pthread
+
+## How to use
+- After compiling the program, you must use a file called "ToSort" you will need to input as much integers you want, ensure that they are seperated by spaces.
+- Save the file on the same folder as the program.
+- After you created the ToSort file, its very simple. just type ./sss ToSort on the terminal and it will print out the Final Array, The total number of swaps, T1 swap count and T2 swap counts.
